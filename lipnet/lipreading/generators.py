@@ -90,41 +90,45 @@ class BasicGenerator(keras.callbacks.Callback):
             except AttributeError as err:
                 raise err
             except:
-                print "Error loading video: "+video_path
+                print("Error loading video: "+video_path)
                 continue
             if K.image_data_format() == 'channels_first' and video.data.shape != (self.img_c,self.frames_n,self.img_w,self.img_h):
-                print "Video "+video_path+" has incorrect shape "+str(video.data.shape)+", must be "+str((self.img_c,self.frames_n,self.img_w,self.img_h))+""
+                print("Video "+video_path+" has incorrect shape "+str(video.data.shape)+", must be "+str((self.img_c,self.frames_n,self.img_w,self.img_h))+"")
                 continue
             if K.image_data_format() != 'channels_first' and video.data.shape != (self.frames_n,self.img_w,self.img_h,self.img_c):
-                print "Video "+video_path+" has incorrect shape "+str(video.data.shape)+", must be "+str((self.frames_n,self.img_w,self.img_h,self.img_c))+""
+                print("Video "+video_path+" has incorrect shape "+str(video.data.shape)+", must be "+str((self.frames_n,self.img_w,self.img_h,self.img_c))+"")
                 continue
             video_list.append(video_path)
         return video_list
 
     def enumerate_align_hash(self, video_list):
         align_hash = {}
+        videos_to_remove = []
         for video_path in video_list:
-            video_id = os.path.splitext(video_path)[0].split('/')[-1]
-            align_path = os.path.join(self.align_path, video_id)+".align"
-            align_hash[video_id] = Align(self.absolute_max_string_len, text_to_labels).from_file(align_path)
-        return align_hash
+            try:
+                video_id = os.path.splitext(video_path)[0].split('/')[-1]
+                align_path = os.path.join(self.align_path, video_id)+".align"
+                align_hash[video_id] = Align(self.absolute_max_string_len, text_to_labels).from_file(align_path)
+            except Exception as e:
+                videos_to_remove.append(video_path)
+        return align_hash, videos_to_remove
 
     def build_dataset(self):
         if os.path.isfile(self.get_cache_path()):
-            print "\nLoading dataset list from cache..."
+            print("\nLoading dataset list from cache...")
             with open (self.get_cache_path(), 'rb') as fp:
                 self.train_list, self.val_list, self.align_hash = pickle.load(fp)
         else:
-            print "\nEnumerating dataset list from disk..."
+            print("\nEnumerating dataset list from disk...")
             self.train_list = self.enumerate_videos(os.path.join(self.train_path, '*', '*'))
             self.val_list   = self.enumerate_videos(os.path.join(self.val_path, '*', '*'))
             self.align_hash = self.enumerate_align_hash(self.train_list + self.val_list)
             with open(self.get_cache_path(), 'wb') as fp:
                 pickle.dump((self.train_list, self.val_list, self.align_hash), fp)
 
-        print "Found {} videos for training.".format(self.training_size)
-        print "Found {} videos for validation.".format(self.validation_size)
-        print ""
+        print("Found {} videos for training.".format(self.training_size))
+        print("Found {} videos for validation.".format(self.validation_size))
+        print("")
 
         np.random.shuffle(self.train_list)
 
@@ -169,59 +173,68 @@ class BasicGenerator(keras.callbacks.Callback):
                   'source_str': source_str  # used for visualization only
                   }
         outputs = {'ctc': np.zeros([size])}  # dummy data for dummy loss function
-
         return (inputs, outputs)
 
-    @threadsafe_generator
+#     @threadsafe_generator
     def next_train(self):
-        r = np.random.RandomState(self.random_seed)
-        while 1:
-            # print "SI: {}, SE: {}".format(self.cur_train_index.value, self.shared_train_epoch.value)
-            with self.cur_train_index.get_lock(), self.shared_train_epoch.get_lock():
-                cur_train_index = self.cur_train_index.value
-                self.cur_train_index.value += self.minibatch_size
-                # Shared epoch increment on start or index >= training in epoch
-                if cur_train_index >= self.steps_per_epoch * self.minibatch_size:
-                    cur_train_index = 0
-                    self.shared_train_epoch.value += 1
-                    self.cur_train_index.value = self.minibatch_size
-                if self.shared_train_epoch.value < 0:
-                    self.shared_train_epoch.value += 1
-                # Shared index overflow
-                if self.cur_train_index.value >= self.training_size:
-                    self.cur_train_index.value = self.cur_train_index.value % self.minibatch_size
-                # Calculate differences between process and shared epoch
-                epoch_differences = self.shared_train_epoch.value - self.process_train_epoch
-            if epoch_differences > 0:
-                self.process_train_epoch += epoch_differences
-                for i in range(epoch_differences):
-                    r.shuffle(self.train_list) # Catch up
-                # print "GENERATOR EPOCH {}".format(self.process_train_epoch)
-                # print self.train_list[0]
-            # print "PI: {}, SI: {}, SE: {}".format(cur_train_index, self.cur_train_index.value, self.shared_train_epoch.value)
-            if self.curriculum is not None and self.curriculum.epoch != self.process_train_epoch:
-                self.update_curriculum(self.process_train_epoch, train=True)
-            # print "Train [{},{}] {}:{}".format(self.process_train_epoch, epoch_differences, cur_train_index,cur_train_index+self.minibatch_size)
-            ret = self.get_batch(cur_train_index, self.minibatch_size, train=True)
-            # if epoch_differences > 0:
-            #     print "GENERATOR EPOCH {} - {}:{}".format(self.process_train_epoch, cur_train_index, cur_train_index + self.minibatch_size)
-            #     print ret[0]['source_str']
-            #     print "-------------------"
-            yield ret
+        try:
+#             print("Inside next_train")
+            r = np.random.RandomState(self.random_seed)
+            while 1:
+#                 print("SI: {}, SE: {}".format(self.cur_train_index.value, self.shared_train_epoch.value))
+                with self.cur_train_index.get_lock(), self.shared_train_epoch.get_lock():
+                    cur_train_index = self.cur_train_index.value
+                    self.cur_train_index.value += self.minibatch_size
+                    # Shared epoch increment on start or index >= training in epoch
+                    if cur_train_index >= self.steps_per_epoch * self.minibatch_size:
+                        cur_train_index = 0
+                        self.shared_train_epoch.value += 1
+                        self.cur_train_index.value = self.minibatch_size
+                    if self.shared_train_epoch.value < 0:
+                        self.shared_train_epoch.value += 1
+                    # Shared index overflow
+                    if self.cur_train_index.value >= self.training_size:
+                        self.cur_train_index.value = self.cur_train_index.value % self.minibatch_size
+                    # Calculate differences between process and shared epoch
+                    epoch_differences = self.shared_train_epoch.value - self.process_train_epoch
+                if epoch_differences > 0:
+                    self.process_train_epoch += epoch_differences
+                    for i in range(epoch_differences):
+                        r.shuffle(self.train_list) # Catch up
+#                     print("GENERATOR EPOCH {}".format(self.process_train_epoch))
+#                     print (self.train_list[0])
+#                 print("PI: {}, SI: {}, SE: {}".format(cur_train_index, self.cur_train_index.value, self.shared_train_epoch.value))
+                if self.curriculum is not None and self.curriculum.epoch != self.process_train_epoch:
+                    self.update_curriculum(self.process_train_epoch, train=True)
+#                 print("Train [{},{}] {}:{}".format(self.process_train_epoch, epoch_differences, cur_train_index,cur_train_index+self.minibatch_size))
+                ret = self.get_batch(cur_train_index, self.minibatch_size, train=True)
+                # if epoch_differences > 0:
+                #     print "GENERATOR EPOCH {} - {}:{}".format(self.process_train_epoch, cur_train_index, cur_train_index + self.minibatch_size)
+                #     print ret[0]['source_str']
+                #     print "-------------------"
+                yield ret
+        except Exception as e:
+            print(e)
+            raise("Exception while generating data", e)
 
-    @threadsafe_generator
+#     @threadsafe_generator
     def next_val(self):
-        while 1:
-            with self.cur_val_index.get_lock():
-                cur_val_index = self.cur_val_index.value
-                self.cur_val_index.value += self.minibatch_size
-                if self.cur_val_index.value >= self.validation_size:
-                    self.cur_val_index.value = self.cur_val_index.value % self.minibatch_size
-            if self.curriculum is not None and self.curriculum.epoch != self.process_epoch:
-                self.update_curriculum(self.process_epoch, train=False)
-            # print "Val [{}] {}:{}".format(self.process_epoch, cur_val_index,cur_val_index+self.minibatch_size)
-            ret = self.get_batch(cur_val_index, self.minibatch_size, train=False)
-            yield ret
+        try:
+            while 1:
+                with self.cur_val_index.get_lock():
+                    cur_val_index = self.cur_val_index.value
+                    self.cur_val_index.value += self.minibatch_size
+                    if self.cur_val_index.value >= self.validation_size:
+                        self.cur_val_index.value = self.cur_val_index.value % self.minibatch_size
+                if self.curriculum is not None and self.curriculum.epoch != self.process_epoch:
+                    self.update_curriculum(self.process_epoch, train=False)
+                # print "Val [{}] {}:{}".format(self.process_epoch, cur_val_index,cur_val_index+self.minibatch_size)
+                ret = self.get_batch(cur_val_index, self.minibatch_size, train=False)
+                yield ret
+        except Exception as e:
+            print(e)
+            raise("Exception while generating validation data", e)
+            
 
     def on_train_begin(self, logs={}):
         with self.cur_train_index.get_lock():
@@ -234,7 +247,7 @@ class BasicGenerator(keras.callbacks.Callback):
 
     def update_curriculum(self, epoch, train=True):
         self.curriculum.update(epoch, train=train)
-        print "Epoch {}: {}".format(epoch, self.curriculum)
+        print("Epoch {}: {}".format(epoch, self.curriculum))
 
 
 # datasets/video/<sid>/<id>/<image>.png
@@ -253,12 +266,15 @@ class RandomSplitGenerator(BasicGenerator):
         
     def build_dataset(self):
         if os.path.isfile(self.get_cache_path()):
-            print "\nLoading dataset list from cache..."
+            print("\nLoading dataset list from cache...")
             with open (self.get_cache_path(), 'rb') as fp:
                 self.train_list, self.val_list, self.align_hash = pickle.load(fp)
         else:
-            print "\nEnumerating dataset list from disk..."
+            print("\nEnumerating dataset list from disk...")
             video_list = self.enumerate_videos(os.path.join(self.video_path, '*', '*'))
+            self.align_hash, videos_to_remove = self.enumerate_align_hash(video_list)
+            if len(videos_to_remove) != 0:
+                video_list = list(set(video_list) - set(videos_to_remove))
             np.random.shuffle(video_list) # Random the video list before splitting
             if(self.val_split > 1): # If val_split is not a probability
                 training_size = len(video_list) - self.val_split
@@ -266,10 +282,10 @@ class RandomSplitGenerator(BasicGenerator):
                 training_size = len(video_list) - int(self.val_split * len(video_list))
             self.train_list = video_list[0:training_size]
             self.val_list   = video_list[training_size:]
-            self.align_hash = self.enumerate_align_hash(self.train_list + self.val_list)
+            
             with open(self.get_cache_path(), 'wb') as fp:
                 pickle.dump((self.train_list, self.val_list, self.align_hash), fp)
 
-        print "Found {} videos for training.".format(self.training_size)
-        print "Found {} videos for validation.".format(self.validation_size)
-        print ""
+        print("Found {} videos for training.".format(self.training_size))
+        print("Found {} videos for validation.".format(self.validation_size))
+        print("")

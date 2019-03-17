@@ -100,3 +100,8 @@ ENV/
 
 # mkdocs documentation
 /site
+*datasets/
+*zip
+*datasets.cache
+*logs/
+*results/
